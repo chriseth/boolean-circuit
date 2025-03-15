@@ -43,9 +43,17 @@ impl std::ops::Not for &Literal {
     type Output = Literal;
 
     fn not(self) -> Literal {
+        !self.clone()
+    }
+}
+
+impl std::ops::Not for Literal {
+    type Output = Literal;
+
+    fn not(self) -> Literal {
         match self {
-            Literal::Pos(name) => Literal::Neg(Rc::clone(name)),
-            Literal::Neg(name) => Literal::Pos(Rc::clone(name)),
+            Literal::Pos(name) => Literal::Neg(name),
+            Literal::Neg(name) => Literal::Pos(name),
         }
     }
 }
