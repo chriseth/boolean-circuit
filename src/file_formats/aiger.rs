@@ -22,7 +22,7 @@ pub fn to_aiger_binary(f: impl Write, output: &Node) -> Result<(), String> {
 
 /// Reads an AIGER file (in binary or text format) and returns the output node.
 ///
-/// Does not support latches.
+/// Does not support latches or more than one output node.
 pub fn from_aiger(f: impl Read) -> Result<Node, String> {
     let mut input = BufReader::new(f);
     let AigerHeader {
