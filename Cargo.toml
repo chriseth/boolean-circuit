@@ -2,6 +2,12 @@
 name = "boolean-circuit"
 version = "1.0.0"
 edition = "2021"
+authors = ["chriseth <chriseth.github@gmail.com>"]
+description = "A library to import, modify and export boolean circuits."
+documentation = "https://docs.rs/boolean-circuit"
+repository = "https://github.com/chriseth/boolean-circuit"
+license = "MIT or Apache-2.0"
+keywords = ["boolean", "circuit", "AIGER", "CNF", "DIMACS"]
 
 [dependencies]
 itertools = "0.14.0"
