@@ -7,7 +7,7 @@ description = "A library to import, modify and export boolean circuits."
 documentation = "https://docs.rs/boolean-circuit"
 repository = "https://github.com/chriseth/boolean-circuit"
 license = "MIT OR Apache-2.0"
-keywords = ["boolean", "circuit", "gate", "AIGER", "CNF", "DIMACS"]
+keywords = ["circuit", "gate", "AIGER", "CNF", "DIMACS"]
 
 [dependencies]
 itertools = "0.14.0"
