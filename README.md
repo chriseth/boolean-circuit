@@ -42,4 +42,4 @@ to CNF which creates now variables and thus a callback to generate new unique va
 
 # License
 
-This project is licensed under MIT. For more information, see the [LICENSE](LICENSE) file.
+This project is dual-licensed under MIT and Apache 2.0.
