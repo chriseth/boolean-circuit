@@ -13,7 +13,7 @@ A circuit in this library is a directed acyclic graph (DAG) where the nodes are 
 - Disjunciton / Or
 - Exclusive Or
 
-Predecessors are stored via `Rc`-pointers to allow sharing of subcircuits.
+Predecessors are stored via `Rc`-pointers, all clones are shallow.
 
 Input gates are identified by their name, i.e. independently created input gates with the same name are considered
 the same gate.
