@@ -16,7 +16,7 @@ struct Evaluator<'a> {
     assignments: &'a HashMap<String, bool>,
 }
 
-impl<'a> Evaluator<'a> {
+impl Evaluator<'_> {
     fn evaluate(&mut self, node: &Node) -> bool {
         if let Some(&result) = self.cache.get(&node.id()) {
             return result;
