@@ -1,14 +1,27 @@
 use std::collections::HashMap;
 
-use crate::{Node, Operation};
+use crate::{Circuit, Gate, Operation};
 
-/// Returns the value computed in `node` given assignments to all required variables.
-pub fn evaluate(node: &Node, assignments: &HashMap<String, bool>) -> bool {
+/// Returns the value computed in `gate` given assignments to all required variables.
+pub fn evaluate_gate(gate: &Gate, assignments: &HashMap<String, bool>) -> bool {
     Evaluator {
         cache: HashMap::new(),
         assignments,
     }
-    .evaluate(node)
+    .evaluate(gate)
+}
+
+/// Returns the values computed in the circuit's output gates given assignments to all required variables.
+pub fn evaluate(circuit: &Circuit, assignments: &HashMap<String, bool>) -> Vec<bool> {
+    let mut evaluator = Evaluator {
+        cache: HashMap::new(),
+        assignments,
+    };
+    circuit
+        .outputs()
+        .iter()
+        .map(|gate| evaluator.evaluate(gate))
+        .collect()
 }
 
 struct Evaluator<'a> {
@@ -17,11 +30,11 @@ struct Evaluator<'a> {
 }
 
 impl Evaluator<'_> {
-    fn evaluate(&mut self, node: &Node) -> bool {
-        if let Some(&result) = self.cache.get(&node.id()) {
+    fn evaluate(&mut self, gate: &Gate) -> bool {
+        if let Some(&result) = self.cache.get(&gate.id()) {
             return result;
         }
-        let result = match node.operation() {
+        let result = match gate.operation() {
             Operation::Variable(name) => {
                 *self.assignments.get(name.as_str()).unwrap_or_else(|| {
                     panic!("No assignment for variable '{name}'");
@@ -33,7 +46,7 @@ impl Evaluator<'_> {
             Operation::Disjunction(left, right) => self.evaluate(left) || self.evaluate(right),
             Operation::Xor(left, right) => self.evaluate(left) ^ self.evaluate(right),
         };
-        self.cache.insert(node.id(), result);
+        self.cache.insert(gate.id(), result);
         result
     }
 }

@@ -29,7 +29,7 @@ Rust's boolean operators are supported on gates.
 [AIGER](https://fmv.jku.at/aiger/) is a file format for and-inverter graphs. This library supports reading and
 writing AIGER files both in binary and text format.
 
-Latches or multiple output nodes are not supported.
+Latches are not supported.
 
 Both the conversion to and the conversion from AIGER results in more gates since and-inverter gates are not native
 to this library.

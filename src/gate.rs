@@ -2,65 +2,65 @@ use std::{collections::HashSet, rc::Rc};
 
 use super::literal::Literal;
 
-/// A node or gate in a boolean circuit.
+/// A gate in a boolean circuit.
 ///
 /// The inputs of the circuit are variables identified by their name.
-/// Other types of nodes are constant nodes or operations that have
+/// Other types of gates are constant gates or operations that have
 /// predecessors.
 ///
 /// The clone operation only performs a shallow clone and thus
-/// allows sharing of nodes.
+/// allows sharing of gates.
 #[derive(Clone, Debug)]
-pub struct Node(Rc<Operation>);
+pub struct Gate(Rc<Operation>);
 
-/// The inner operation of a {Node} and the predecessors.
+/// The inner operation of a {Gate} and the predecessors.
 #[derive(Clone, Debug)]
 pub enum Operation {
     /// An input variable.
     Variable(Rc<String>),
     /// A constant value.
     Constant(bool),
-    /// The boolean negation of another node.
-    Negation(Node),
-    /// The boolean conjunction of two nodes.
-    Conjunction(Node, Node),
-    /// The boolean disjunction of two nodes.
-    Disjunction(Node, Node),
-    /// The boolean exclusive or of two nodes.
-    Xor(Node, Node),
+    /// The boolean negation of another gate.
+    Negation(Gate),
+    /// The boolean conjunction of two gates.
+    Conjunction(Gate, Gate),
+    /// The boolean disjunction of two gates.
+    Disjunction(Gate, Gate),
+    /// The boolean exclusive or of two gates.
+    Xor(Gate, Gate),
 }
 
-impl From<&str> for Node {
-    /// Constructs a new node representing an input variable.
+impl From<&str> for Gate {
+    /// Constructs a new gate representing an input variable.
     ///
     /// Two variables with the same name are considered equal, even
-    /// if they are different node instances.
-    fn from(name: &str) -> Node {
+    /// if they are different {Gate} instances.
+    fn from(name: &str) -> Gate {
         name.to_string().into()
     }
 }
 
-impl From<String> for Node {
-    /// Constructs a new node representing an input variable.
+impl From<String> for Gate {
+    /// Constructs a new gate representing an input variable.
     ///
     /// Two variables with the same name are considered equal, even
-    /// if they are different node instances.
-    fn from(name: String) -> Node {
-        Node(Rc::new(Operation::Variable(Rc::new(name))))
+    /// if they are different gate instances.
+    fn from(name: String) -> Gate {
+        Gate(Rc::new(Operation::Variable(Rc::new(name))))
     }
 }
 
-impl From<bool> for Node {
-    /// Creates a constant node.
-    fn from(value: bool) -> Node {
-        Node(Rc::new(Operation::Constant(value)))
+impl From<bool> for Gate {
+    /// Creates a constant gate.
+    fn from(value: bool) -> Gate {
+        Gate(Rc::new(Operation::Constant(value)))
     }
 }
 
-impl From<&Literal> for Node {
-    /// Converts a literal to either a variable or a node that is the negation
+impl From<&Literal> for Gate {
+    /// Converts a literal to either a variable or a gate that is the negation
     /// of a variable.
-    fn from(literal: &Literal) -> Node {
+    fn from(literal: &Literal) -> Gate {
         let v = literal.var().into();
         if literal.is_negated() {
             !&v
@@ -70,32 +70,32 @@ impl From<&Literal> for Node {
     }
 }
 
-impl Node {
-    /// Returns an identifier for the node which is unique in the circuit
+impl Gate {
+    /// Returns an identifier for the gate which is unique in the circuit
     /// but not stable across program reloads.
     pub fn id(&self) -> usize {
         Rc::as_ptr(&self.0) as usize
     }
 
-    /// Returns the operation of the node.
+    /// Returns the operation of the gate.
     pub fn operation(&self) -> &Operation {
         &self.0
     }
 
-    /// Creates an iterator over the graph (the node itself and all its predecessors)
-    /// that returns each node exactly once.
-    pub fn iter(&self) -> impl Iterator<Item = &Node> {
+    /// Creates an iterator over the graph (the gate itself and all its predecessors)
+    /// that returns each gate exactly once.
+    pub fn iter(&self) -> impl Iterator<Item = &Gate> {
         self.into_iter()
     }
 
-    /// Creates an iterator over the graph (the node itself and all its predecessors)
-    /// with post-visit order, visiting each node exactly once.
-    /// This means that the predecessors of each node are always visited before the node itself.
-    pub fn post_visit_iter(&self) -> impl Iterator<Item = &Node> {
-        PostVisitIterator::new(self)
+    /// Creates an iterator over the graph (the gate itself and all its predecessors)
+    /// with post-visit order, visiting each gate exactly once.
+    /// This means that the predecessors of each gate are always visited before the gate itself.
+    pub fn post_visit_iter(&self) -> impl Iterator<Item = &Gate> {
+        PostVisitIterator::new(std::iter::once(self))
     }
 
-    /// Turns the node and its predecessors into a string representation, repeating shared nodes.
+    /// Turns the gate and its predecessors into a string representation, repeating shared gates.
     pub fn to_string_as_tree(&self) -> String {
         match self.operation() {
             Operation::Variable(name) => format!("{name}"),
@@ -119,11 +119,11 @@ impl Node {
                 left.to_string_as_tree(),
                 right.to_string_as_tree()
             ),
-            Operation::Negation(node) => format!("!{}", node.to_string_as_tree()),
+            Operation::Negation(gate) => format!("!{}", gate.to_string_as_tree()),
         }
     }
 
-    /// Returns the value of the node if it is a constant input node.
+    /// Returns the value of the gate if it is a constant input gate.
     pub fn try_to_constant(&self) -> Option<bool> {
         match self.operation() {
             Operation::Constant(value) => Some(*value),
@@ -131,7 +131,7 @@ impl Node {
         }
     }
 
-    /// Returns the number of variables and gates (nodes not counting
+    /// Returns the number of variables and inner gates (gates not counting
     /// variables or constants) in the circuit.
     ///
     /// This depends on how the circuit was constructed, i.e. it does not deduplicate
@@ -157,95 +157,95 @@ impl Node {
     }
 }
 
-impl std::ops::BitAnd for Node {
-    type Output = Node;
+impl std::ops::BitAnd for Gate {
+    type Output = Gate;
 
-    fn bitand(self, other: Node) -> Node {
-        Node(Rc::new(Operation::Conjunction(self, other)))
+    fn bitand(self, other: Gate) -> Gate {
+        Gate(Rc::new(Operation::Conjunction(self, other)))
     }
 }
 
-impl std::ops::BitAnd for &Node {
-    type Output = Node;
+impl std::ops::BitAnd for &Gate {
+    type Output = Gate;
 
-    fn bitand(self, other: &Node) -> Node {
-        Node::bitand(self.clone(), other.clone())
+    fn bitand(self, other: &Gate) -> Gate {
+        Gate::bitand(self.clone(), other.clone())
     }
 }
 
-impl std::ops::BitOr for Node {
-    type Output = Node;
+impl std::ops::BitOr for Gate {
+    type Output = Gate;
 
-    fn bitor(self, other: Node) -> Node {
-        Node(Rc::new(Operation::Disjunction(self, other)))
+    fn bitor(self, other: Gate) -> Gate {
+        Gate(Rc::new(Operation::Disjunction(self, other)))
     }
 }
 
-impl std::ops::BitOr for &Node {
-    type Output = Node;
+impl std::ops::BitOr for &Gate {
+    type Output = Gate;
 
-    fn bitor(self, other: &Node) -> Node {
-        Node::bitor(self.clone(), other.clone())
+    fn bitor(self, other: &Gate) -> Gate {
+        Gate::bitor(self.clone(), other.clone())
     }
 }
 
-impl std::ops::BitXor for Node {
-    type Output = Node;
+impl std::ops::BitXor for Gate {
+    type Output = Gate;
 
-    fn bitxor(self, other: Node) -> Node {
-        Node(Rc::new(Operation::Xor(self, other)))
+    fn bitxor(self, other: Gate) -> Gate {
+        Gate(Rc::new(Operation::Xor(self, other)))
     }
 }
 
-impl std::ops::BitXor for &Node {
-    type Output = Node;
+impl std::ops::BitXor for &Gate {
+    type Output = Gate;
 
-    fn bitxor(self, other: &Node) -> Node {
-        Node::bitxor(self.clone(), other.clone())
+    fn bitxor(self, other: &Gate) -> Gate {
+        Gate::bitxor(self.clone(), other.clone())
     }
 }
 
-impl std::ops::Not for Node {
-    type Output = Node;
+impl std::ops::Not for Gate {
+    type Output = Gate;
 
-    fn not(self) -> Node {
-        Node(Rc::new(Operation::Negation(self)))
+    fn not(self) -> Gate {
+        Gate(Rc::new(Operation::Negation(self)))
     }
 }
 
-impl std::ops::Not for &Node {
-    type Output = Node;
+impl std::ops::Not for &Gate {
+    type Output = Gate;
 
-    fn not(self) -> Node {
-        Node::not(self.clone())
+    fn not(self) -> Gate {
+        Gate::not(self.clone())
     }
 }
 
-impl<'a> IntoIterator for &'a Node {
-    type Item = &'a Node;
+impl<'a> IntoIterator for &'a Gate {
+    type Item = &'a Gate;
     type IntoIter = GraphIterator<'a>;
 
-    /// Creates an iterator over the graph that returns each node exactly once.
+    /// Creates an iterator over the graph that returns each gate exactly once.
     fn into_iter(self) -> Self::IntoIter {
-        GraphIterator::new(self)
+        GraphIterator::new(std::iter::once(self))
     }
 }
 
 pub struct GraphIterator<'a> {
     visited: HashSet<usize>,
-    stack: Vec<&'a Node>,
+    stack: Vec<&'a Gate>,
 }
 
 impl<'a> GraphIterator<'a> {
-    fn new(node: &'a Node) -> Self {
+    pub(crate) fn new(gates: impl IntoIterator<Item = &'a Gate>) -> Self {
         Self {
             visited: HashSet::new(),
-            stack: vec![node],
+            stack: gates.into_iter().collect(),
         }
     }
 
-    fn add_predecessors(&mut self, node: &'a Node) {
-        match node.operation() {
+    fn add_predecessors(&mut self, gate: &'a Gate) {
+        match gate.operation() {
             Operation::Variable(_) | Operation::Constant(_) => {}
             Operation::Conjunction(left, right)
             | Operation::Disjunction(left, right)
@@ -261,45 +261,45 @@ impl<'a> GraphIterator<'a> {
 }
 
 impl<'a> Iterator for GraphIterator<'a> {
-    type Item = &'a Node;
+    type Item = &'a Gate;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(node) = self.stack.pop() {
-            if self.visited.insert(node.id()) {
-                self.add_predecessors(node);
-                return Some(node);
+        while let Some(gate) = self.stack.pop() {
+            if self.visited.insert(gate.id()) {
+                self.add_predecessors(gate);
+                return Some(gate);
             }
         }
         None
     }
 }
 
-struct PostVisitIterator<'a> {
+pub(crate) struct PostVisitIterator<'a> {
     visited: HashSet<usize>,
-    /// Stack of nodes to visit. If the flag is true, we will have
-    /// visited all its predecessors once we reach the node.
-    stack: Vec<(&'a Node, bool)>,
+    /// Stack of gates to visit. If the flag is true, we will have
+    /// visited all its predecessors once we reach the gate.
+    stack: Vec<(&'a Gate, bool)>,
 }
 
 impl<'a> PostVisitIterator<'a> {
-    fn new(node: &'a Node) -> Self {
+    pub(crate) fn new(gates: impl IntoIterator<Item = &'a Gate>) -> Self {
         Self {
             visited: HashSet::new(),
-            stack: vec![(node, false)],
+            stack: gates.into_iter().map(|n| (n, false)).collect(),
         }
     }
 }
 
 impl<'a> Iterator for PostVisitIterator<'a> {
-    type Item = &'a Node;
+    type Item = &'a Gate;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some((node, visited_predecessors)) = self.stack.pop() {
+        while let Some((gate, visited_predecessors)) = self.stack.pop() {
             if visited_predecessors {
-                return Some(node);
-            } else if self.visited.insert(node.id()) {
-                self.stack.push((node, true));
-                match node.operation() {
+                return Some(gate);
+            } else if self.visited.insert(gate.id()) {
+                self.stack.push((gate, true));
+                match gate.operation() {
                     Operation::Variable(_) | Operation::Constant(_) => {}
                     Operation::Conjunction(left, right)
                     | Operation::Disjunction(left, right)
