@@ -6,40 +6,49 @@ use std::{
 
 use itertools::Itertools;
 
-use crate::{Node, Operation};
+use crate::{Circuit, Gate, Operation};
 
-/// Translates the output node (and the circuit it references) to (text) AIGER
-/// format and writes it to the given writer.
-pub fn to_aiger(f: impl Write, output: &Node) -> Result<(), String> {
-    AigerWriter::new(output, false).process(f)
+/// Translates the [`Circuit`] to (text) AIGER format and writes it to the given writer.
+pub fn to_aiger(f: impl Write, circuit: &Circuit) -> Result<(), String> {
+    AigerWriter::new(circuit, false).process(f)
 }
 
-/// Translates the output node (and the circuit it references) to binary AIGER
-/// format and writes it to the given writer.
-pub fn to_aiger_binary(f: impl Write, output: &Node) -> Result<(), String> {
-    AigerWriter::new(output, true).process(f)
+/// Translates the [`Circuit`] to binary AIGER format and writes it to the given writer.
+pub fn to_aiger_binary(f: impl Write, circuit: &Circuit) -> Result<(), String> {
+    AigerWriter::new(circuit, true).process(f)
 }
 
-/// Reads an AIGER file (in binary or text format) and returns the output node.
+/// Reads an AIGER file (in binary or text format) and returns the represented {Circuit}.
 ///
-/// Does not support latches or more than one output node.
-pub fn from_aiger(f: impl Read) -> Result<Node, String> {
+/// Does not support latches.
+pub fn from_aiger(f: impl Read) -> Result<Circuit, String> {
     let mut input = BufReader::new(f);
     let AigerHeader {
         is_binary,
         input_count,
+        output_count,
         and_count,
     } = parse_header(&mut input)?;
     let input_literals = parse_input_literals(input_count, is_binary, &mut input)?;
-    let output_literal = parse_output_literal(&mut input)?;
+    let output_literals = parse_literals(output_count, &mut input)?;
     let and_gates = parse_and_gates(input_count, and_count, is_binary, &mut input)?;
-    let gates = build_named_inputs(input_literals, &mut input)?;
 
-    CircuitBuilder { gates, and_gates }.build_node(output_literal)
+    let names = parse_names(input_literals, output_literals.len(), &mut input)?;
+
+    let mut builder = CircuitBuilder {
+        gates: names.inputs,
+        and_gates,
+    };
+    let outputs: Vec<_> = output_literals
+        .into_iter()
+        .zip_eq(names.outputs)
+        .map(|(o, name)| Ok((builder.build_gate(o)?, name)))
+        .collect::<Result<_, String>>()?;
+    Ok(Circuit::from_named_outputs(outputs))
 }
 
-/// Returns true if the output of the AIG translation of the node is inverted.
-fn has_inverted_output(n: &Node) -> bool {
+/// Returns true if the output of the AIG translation of the gate is inverted.
+fn has_inverted_output(n: &Gate) -> bool {
     match n.operation() {
         Operation::Variable(_) => false,
         Operation::Constant(v) => *v,
@@ -51,7 +60,7 @@ fn has_inverted_output(n: &Node) -> bool {
 }
 
 /// Returns the number of AND gates required to translate this gate.
-fn and_gates_needed(n: &Node) -> usize {
+fn and_gates_needed(n: &Gate) -> usize {
     match n.operation() {
         Operation::Variable(_) | Operation::Constant(_) | Operation::Negation(_) => 0,
         Operation::Conjunction(..) | Operation::Disjunction(..) => 1,
@@ -73,18 +82,18 @@ fn aiger_encode_number(f: &mut impl Write, mut n: u32) -> Result<(), std::io::Er
 
 struct AigerWriter<'a> {
     binary_format: bool,
-    output: &'a Node,
-    node_id_to_literal: HashMap<usize, u32>,
+    circuit: &'a Circuit,
+    gate_id_to_literal: HashMap<usize, u32>,
     input_name_to_literal: HashMap<&'a str, u32>,
     var_count: usize,
 }
 
 impl<'a> AigerWriter<'a> {
-    pub fn new(output: &'a Node, binary_format: bool) -> Self {
-        // Create a node-to-literal mapping that already incorporates if the
+    pub fn new(circuit: &'a Circuit, binary_format: bool) -> Self {
+        // Create a gate-to-literal mapping that already incorporates if the
         // output is inverted or not.
         // Start with inputs since this is a requirement for binary encoding.
-        let var_name_to_literal: HashMap<_, _> = output
+        let var_name_to_literal: HashMap<_, _> = circuit
             .iter()
             .filter_map(|n| {
                 if let Operation::Variable(name) = n.operation() {
@@ -101,9 +110,9 @@ impl<'a> AigerWriter<'a> {
             })
             .collect();
         // We skip constants and not-gates, since they do not need variables.
-        // Post-order traversal is important since the predecessor nodes have to
+        // Post-order traversal is important since the predecessor gates have to
         // have smaller IDs.
-        let (node_id_to_literal, var_count) = output
+        let (gate_id_to_literal, var_count) = circuit
             .post_visit_iter()
             .filter(|n| {
                 !matches!(
@@ -113,19 +122,19 @@ impl<'a> AigerWriter<'a> {
             })
             .fold(
                 (HashMap::new(), var_name_to_literal.len()),
-                |(mut map, var_count), node| {
-                    let gates_needed = and_gates_needed(node);
+                |(mut map, var_count), gate| {
+                    let gates_needed = and_gates_needed(gate);
                     assert!(gates_needed > 0);
                     let var_id = var_count + gates_needed;
-                    let literal = 2 * var_id as u32 + if has_inverted_output(node) { 1 } else { 0 };
-                    map.insert(node.id(), literal);
+                    let literal = 2 * var_id as u32 + if has_inverted_output(gate) { 1 } else { 0 };
+                    map.insert(gate.id(), literal);
                     (map, var_id)
                 },
             );
         Self {
             binary_format,
-            output,
-            node_id_to_literal,
+            circuit,
+            gate_id_to_literal,
             input_name_to_literal: var_name_to_literal,
             var_count,
         }
@@ -138,7 +147,7 @@ impl<'a> AigerWriter<'a> {
 
     fn compute_and_gates(&mut self) -> Vec<(u32, u32, u32)> {
         let mut and_gates = vec![];
-        for n in self.output.post_visit_iter() {
+        for n in self.circuit.post_visit_iter() {
             let gate_var = self.literal(n);
             match n.operation() {
                 Operation::Variable(_) | Operation::Constant(_) | Operation::Negation(_) => {}
@@ -174,10 +183,11 @@ impl<'a> AigerWriter<'a> {
         // Header
         writeln!(
             f,
-            "a{}g {} {} 0 1 {}",
+            "a{}g {} {} 0 {} {}",
             if self.binary_format { "i" } else { "a" },
             self.var_count,
             self.input_name_to_literal.len(),
+            self.circuit.outputs().len(),
             and_gates.len()
         )?;
         if !self.binary_format {
@@ -186,8 +196,16 @@ impl<'a> AigerWriter<'a> {
                 writeln!(f, "{var}")?;
             }
         }
-        // Output
-        writeln!(f, "{}", self.literal_ref(self.output))?;
+        // Outputs
+        write!(
+            f,
+            "{}",
+            self.circuit
+                .outputs()
+                .iter()
+                .map(|o| format!("{}\n", self.literal_ref(o)))
+                .format("")
+        )?;
         // And gates
         for (out, left, right) in and_gates {
             self.write_gate(f, (out, left, right))?;
@@ -200,6 +218,11 @@ impl<'a> AigerWriter<'a> {
             .enumerate()
         {
             writeln!(f, "i{i} {name}")?;
+        }
+        for (i, name) in self.circuit.output_names().iter().enumerate() {
+            if !name.is_empty() {
+                writeln!(f, "o{i} {name}")?;
+            }
         }
 
         Ok(())
@@ -216,26 +239,27 @@ impl<'a> AigerWriter<'a> {
         }
     }
 
-    /// Returns the literal when referencing the node, i.e. including the inversion.
-    fn literal_ref(&self, node: &Node) -> u32 {
-        match node.operation() {
+    /// Returns the literal when referencing the gate, i.e. including the inversion.
+    fn literal_ref(&self, gate: &Gate) -> u32 {
+        match gate.operation() {
             Operation::Constant(v) => *v as u32,
             Operation::Variable(name) => self.input_name_to_literal[name.as_str()],
             Operation::Negation(inner) => invert(self.literal_ref(inner)),
-            _ => self.node_id_to_literal[&node.id()],
+            _ => self.gate_id_to_literal[&gate.id()],
         }
     }
 
-    /// Returns the literal when identifying the node in the definition,
+    /// Returns the literal when identifying the gate in the definition,
     /// i.e. excluding the inversion.
-    fn literal(&self, node: &Node) -> u32 {
-        self.literal_ref(node) & !1
+    fn literal(&self, gate: &Gate) -> u32 {
+        self.literal_ref(gate) & !1
     }
 }
 
 struct AigerHeader {
     is_binary: bool,
     input_count: usize,
+    output_count: usize,
     and_count: usize,
 }
 
@@ -262,12 +286,10 @@ fn parse_header(input: &mut impl BufRead) -> Result<AigerHeader, String> {
     if latch_count != 0 {
         return Err("Latches are not supported".to_string());
     }
-    if output_count != 1 {
-        return Err("Only one output is supported".to_string());
-    }
     Ok(AigerHeader {
         is_binary,
         input_count,
+        output_count,
         and_count,
     })
 }
@@ -277,22 +299,22 @@ fn parse_input_literals(
     is_binary: bool,
     f: &mut impl BufRead,
 ) -> Result<Vec<u64>, String> {
-    Ok(if is_binary {
-        (0..input_count).map(|i| 2 * (i as u64 + 1)).collect()
+    if is_binary {
+        Ok((0..input_count).map(|i| 2 * (i as u64 + 1)).collect())
     } else {
-        let literals = (0..input_count)
-            .map(|_| {
-                let line = read_line(f)?;
-                line.parse::<u64>().map_err(|e| e.to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(literals.len(), input_count);
-        literals
-    })
+        parse_literals(input_count, f)
+    }
 }
 
-fn parse_output_literal(f: &mut impl BufRead) -> Result<u64, String> {
-    read_line(f)?.parse::<u64>().map_err(|e| e.to_string())
+fn parse_literals(count: usize, f: &mut impl BufRead) -> Result<Vec<u64>, String> {
+    let literals = (0..count)
+        .map(|_| {
+            let line = read_line(f)?;
+            line.parse::<u64>().map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(literals.len(), count);
+    Ok(literals)
 }
 
 /// Parses the gates into a hash map of output -> (left, right).
@@ -364,36 +386,56 @@ fn aiger_decode_number(f: &mut impl Read) -> Result<u32, String> {
     Ok(result)
 }
 
-fn build_named_inputs(
+struct Names {
+    /// For the inputs, we already construct the [`Gate`].
+    /// This map contains all input gates, also the un-named.
+    inputs: HashMap<u64, Gate>,
+    /// The output names are just stored in a vector.
+    outputs: Vec<String>,
+}
+
+fn parse_names(
     input_literals: Vec<u64>,
+    output_count: usize,
     f: &mut impl BufRead,
-) -> Result<HashMap<u64, Node>, String> {
+) -> Result<Names, String> {
     let mut used_input_names: HashSet<String> = Default::default();
     let mut named_inputs = HashMap::default();
+    let mut output_names = vec![String::new(); output_count];
     loop {
         let Ok(line) = read_line(f) else {
             break;
         };
-        let Some(suffix) = line.strip_prefix("i") else {
-            break;
+        let is_input = match line.chars().next() {
+            Some('i') => true,
+            Some('o') => false,
+            _ => break,
         };
+        let kind_name = if is_input { "input" } else { "output" };
+        let suffix = &line[1..];
         let parts = suffix.split(' ').collect_vec();
-        if parts.len() != 2 {
+        let [index, name] = parts.as_slice() else {
             return Err(format!(
-                "Expected exactly two parts for input name, but got {suffix}"
+                "Expected exactly two parts for {kind_name} name, but got {suffix}"
+            ));
+        };
+        let index = index
+            .parse::<usize>()
+            .map_err(|e| format!("Expected {kind_name} literal: {e}"))?;
+
+        if (is_input && index >= input_literals.len()) || (!is_input && index >= output_count) {
+            return Err(format!(
+                "Out of range for {kind_name} literal name: {index}"
             ));
         }
-        let index = parts[0]
-            .parse::<usize>()
-            .map_err(|e| format!("Expected input literal: {e}"))?;
-        if index >= input_literals.len() {
-            return Err(format!("Out of range for input literal name: {index}"));
+        if is_input {
+            if !used_input_names.insert(name.to_string()) {
+                return Err(format!("Duplicate {kind_name} name: {name}"));
+            }
+            named_inputs.insert(input_literals[index], Gate::from(*name));
+        } else {
+            output_names[index] = name.to_string();
         }
-        let name = parts[1];
-        if !used_input_names.insert(name.to_string()) {
-            return Err(format!("Duplicate input name: {name}"));
-        }
-        named_inputs.insert(input_literals[index], Node::from(parts[1]));
     }
     let mut last_input_id = 0;
     let anonymous_inputs = input_literals
@@ -403,23 +445,26 @@ fn build_named_inputs(
             while used_input_names.contains(&format!("v_{last_input_id}")) {
                 last_input_id += 1;
             }
-            (lit, Node::from(format!("v_{last_input_id}")))
+            (lit, Gate::from(format!("v_{last_input_id}")))
         })
         .collect_vec();
     named_inputs.extend(anonymous_inputs);
     assert_eq!(named_inputs.len(), input_literals.len());
-    Ok(named_inputs)
+    Ok(Names {
+        inputs: named_inputs,
+        outputs: output_names,
+    })
 }
 
 struct CircuitBuilder {
-    gates: HashMap<u64, Node>,
+    gates: HashMap<u64, Gate>,
     and_gates: HashMap<u64, (u64, u64)>,
 }
 
 impl CircuitBuilder {
-    fn build_node(&mut self, literal: u64) -> Result<Node, String> {
+    fn build_gate(&mut self, literal: u64) -> Result<Gate, String> {
         if literal & 1 == 1 {
-            return Ok(!(self.build_node(literal & !1)?));
+            return Ok(!(self.build_gate(literal & !1)?));
         }
         Ok(if let Some(n) = self.gates.get(&literal) {
             n.clone()
@@ -429,7 +474,7 @@ impl CircuitBuilder {
                 .get(&literal)
                 .cloned()
                 .ok_or_else(|| format!("Gate not found: {literal}"))?;
-            self.build_node(left)? & self.build_node(right)?
+            self.build_gate(left)? & self.build_gate(right)?
         })
     }
 }
@@ -455,9 +500,15 @@ fn read_line(input: &mut impl BufRead) -> Result<String, String> {
 mod test {
     use super::*;
 
-    fn test_aiger_out(node: Node, expected: &str) {
+    fn test_aiger_out(gate: Gate, expected: &str) {
         let mut buf = vec![];
-        to_aiger(&mut buf, &node).unwrap();
+        to_aiger(&mut buf, &Circuit::from_unnamed_outputs([gate])).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), expected);
+    }
+
+    fn test_aiger_circuit_out(circuit: &Circuit, expected: &str) {
+        let mut buf = vec![];
+        to_aiger(&mut buf, circuit).unwrap();
         assert_eq!(String::from_utf8(buf).unwrap(), expected);
     }
 
@@ -467,37 +518,49 @@ mod test {
 
         #[test]
         fn constant_true() {
-            let output = Node::from(true);
+            let output = Gate::from(true);
             test_aiger_out(output, "aag 0 0 0 1 0\n1\n");
         }
 
         #[test]
         fn constant_false() {
-            let output = Node::from(false);
+            let output = Gate::from(false);
             test_aiger_out(output, "aag 0 0 0 1 0\n0\n");
         }
 
         #[test]
         fn inverter() {
-            let output = !Node::from("x");
+            let output = !Gate::from("x");
             test_aiger_out(output, "aag 1 1 0 1 0\n2\n3\ni0 x\n");
         }
 
         #[test]
+        fn simple_circuit() {
+            let circuit = Circuit::from_named_outputs([
+                (!Gate::from("x"), "out1".to_string()),
+                (Gate::from("y"), "out2".to_string()),
+            ]);
+            test_aiger_circuit_out(
+                &circuit,
+                "aag 2 2 0 2 0\n2\n4\n5\n2\ni0 y\ni1 x\no0 out1\no1 out2\n",
+            );
+        }
+
+        #[test]
         fn and_gate() {
-            let output = Node::from("x") & Node::from("y");
+            let output = Gate::from("x") & Gate::from("y");
             test_aiger_out(output, "aag 3 2 0 1 1\n2\n4\n6\n6 4 2\ni0 x\ni1 y\n");
         }
 
         #[test]
         fn or_gate() {
-            let output = Node::from("x") | Node::from("y");
+            let output = Gate::from("x") | Gate::from("y");
             test_aiger_out(output, "aag 3 2 0 1 1\n2\n4\n7\n6 5 3\ni0 x\ni1 y\n");
         }
 
         #[test]
         fn xor_gate() {
-            let output = Node::from("x") ^ Node::from("y");
+            let output = Gate::from("x") ^ Gate::from("y");
             test_aiger_out(
                 output,
                 "aag 5 2 0 1 3\n2\n4\n11\n6 5 2\n8 4 3\n10 9 7\ni0 x\ni1 y\n",
@@ -505,15 +568,38 @@ mod test {
         }
 
         #[test]
+        fn xor_and_circuit() {
+            let x = Gate::from("x");
+            let y = Gate::from("y");
+            let circuit = Circuit::from_named_outputs([
+                (x.clone() ^ y, "out1".to_string()),
+                (x & Gate::from("y"), "out2".to_string()),
+            ]);
+            test_aiger_circuit_out(
+                &circuit,
+                 "aag 6 2 0 2 4\n2\n4\n13\n6\n6 4 2\n8 5 2\n10 4 3\n12 11 9\ni0 x\ni1 y\no0 out1\no1 out2\n"
+            );
+        }
+
+        #[test]
+        fn unnamed_out() {
+            let circuit = Circuit::from_named_outputs([
+                (!Gate::from("x"), Default::default()),
+                (Gate::from("y"), "out2".to_string()),
+            ]);
+            test_aiger_circuit_out(&circuit, "aag 2 2 0 2 0\n2\n4\n5\n2\ni0 y\ni1 x\no1 out2\n");
+        }
+
+        #[test]
         fn var_repetition() {
-            // Tests repetition of the same variable name but in different nodes.
-            let output = Node::from("x") & Node::from("x");
+            // Tests repetition of the same variable name but in different gates.
+            let output = Gate::from("x") & Gate::from("x");
             test_aiger_out(output, "aag 2 1 0 1 1\n2\n4\n4 2 2\ni0 x\n");
         }
 
         #[test]
         fn multi_stage() {
-            let a = Node::from("x") & Node::from("y");
+            let a = Gate::from("x") & Gate::from("y");
             let output = &a | &!&a;
             test_aiger_out(output, "aag 4 2 0 1 2\n2\n4\n9\n6 4 2\n8 7 6\ni0 x\ni1 y\n");
         }
@@ -537,22 +623,35 @@ mod test {
 
         #[test]
         fn multi_stage_binary() {
-            let a = Node::from("x") & Node::from("y");
+            let a = Gate::from("x") & Gate::from("y");
             let output = &a | &!&a;
             let mut buf = vec![];
-            to_aiger_binary(&mut buf, &output).unwrap();
+            to_aiger_binary(&mut buf, &Circuit::from_unnamed_outputs([output])).unwrap();
             let expected = b"aig 4 2 0 1 2\n9\n\x02\x02\x01\x01i0 x\ni1 y\n";
+            assert_eq!(buf, expected);
+        }
+
+        #[test]
+        fn multi_stage_binary_named_outputs() {
+            let a = Gate::from("x") & Gate::from("y");
+            let output = &a | &!&a;
+            let mut buf = vec![];
+            to_aiger_binary(
+                &mut buf,
+                &Circuit::from_named_outputs([(output, "out".to_string()), (a, "a".to_string())]),
+            )
+            .unwrap();
+            let expected = b"aig 4 2 0 2 2\n9\n6\n\x02\x02\x01\x01i0 x\ni1 y\no0 out\no1 a\n";
             assert_eq!(buf, expected);
         }
     }
 
     mod input {
-
         use crate::evaluate;
 
         use super::*;
 
-        fn test_function_x_y(data: &[u8], fun: &impl Fn(bool, bool) -> bool) {
+        fn test_function_x_y(data: &[u8], fun: &impl Fn(bool, bool) -> Vec<bool>) {
             let out = from_aiger(data).unwrap();
             for x_val in [false, true] {
                 for y_val in [false, true] {
@@ -569,13 +668,28 @@ mod test {
         #[test]
         fn xor_ascii() {
             let data = b"aag 5 2 0 1 3\n2\n4\n11\n6 5 2\n8 4 3\n10 9 7\ni0 x\ni1 y\n";
-            test_function_x_y(data, &|x, y| x ^ y);
+            test_function_x_y(data, &|x, y| vec![x ^ y]);
+        }
+
+        #[test]
+        fn xor_ascii_multi() {
+            let data =
+                b"aag 5 2 0 2 3\n2\n4\n11\n10\n6 5 2\n8 4 3\n10 9 7\ni0 x\ni1 y\no0 w\no1 z\n";
+            test_function_x_y(data, &|x, y| vec![x ^ y, !(x ^ y)]);
         }
 
         #[test]
         fn multi_stage_binary() {
             let data = b"aig 4 2 0 1 2\n9\n\x02\x02\x01\x01i0 x\ni1 y\n";
-            test_function_x_y(data, &|_, _| true);
+            test_function_x_y(data, &|_, _| vec![true]);
+        }
+
+        #[test]
+        fn output_names() {
+            let data =
+                b"aag 5 2 0 2 3\n2\n4\n11\n10\n6 5 2\n8 4 3\n10 9 7\ni0 x\ni1 y\no1 z\no0 w\n";
+            let circuit = from_aiger(&data[..]).unwrap();
+            assert_eq!(circuit.output_names(), ["w", "z"]);
         }
 
         #[test]
