@@ -19,6 +19,7 @@ pub fn to_aiger_binary(f: impl Write, circuit: &Circuit) -> Result<(), String> {
 }
 
 /// Reads an AIGER file (in binary or text format) and returns the represented {Circuit}.
+/// Stores the order of the input gates.
 ///
 /// Does not support latches.
 pub fn from_aiger(f: impl Read) -> Result<Circuit, String> {
@@ -33,7 +34,16 @@ pub fn from_aiger(f: impl Read) -> Result<Circuit, String> {
     let output_literals = parse_literals(output_count, &mut input)?;
     let and_gates = parse_and_gates(input_count, and_count, is_binary, &mut input)?;
 
-    let names = parse_names(input_literals, output_literals.len(), &mut input)?;
+    let names = parse_names(&input_literals, output_literals.len(), &mut input)?;
+
+    let input_names = input_literals
+        .iter()
+        .map(|lit| match names.inputs[lit].operation() {
+            Operation::Variable(name) => name,
+            _ => unreachable!(),
+        })
+        .map(|name| name.as_ref().clone())
+        .collect();
 
     let mut builder = CircuitBuilder {
         gates: names.inputs,
@@ -44,7 +54,7 @@ pub fn from_aiger(f: impl Read) -> Result<Circuit, String> {
         .zip_eq(names.outputs)
         .map(|(o, name)| Ok((builder.build_gate(o)?, name)))
         .collect::<Result<_, String>>()?;
-    Ok(Circuit::from_named_outputs(outputs))
+    Circuit::from_named_outputs(outputs).with_input_order(input_names)
 }
 
 /// Returns true if the output of the AIG translation of the gate is inverted.
@@ -94,15 +104,7 @@ impl<'a> AigerWriter<'a> {
         // output is inverted or not.
         // Start with inputs since this is a requirement for binary encoding.
         let var_name_to_literal: HashMap<_, _> = circuit
-            .iter()
-            .filter_map(|n| {
-                if let Operation::Variable(name) = n.operation() {
-                    Some(name.as_str())
-                } else {
-                    None
-                }
-            })
-            .unique()
+            .input_names()
             .enumerate()
             .map(|(i, name)| {
                 let literal = 2 * (i + 1) as u32;
@@ -395,7 +397,7 @@ struct Names {
 }
 
 fn parse_names(
-    input_literals: Vec<u64>,
+    input_literals: &[u64],
     output_count: usize,
     f: &mut impl BufRead,
 ) -> Result<Names, String> {
@@ -644,6 +646,16 @@ mod test {
             let expected = b"aig 4 2 0 2 2\n9\n6\n\x02\x02\x01\x01i0 x\ni1 y\no0 out\no1 a\n";
             assert_eq!(buf, expected);
         }
+
+        #[test]
+        fn order_of_inputs() {
+            let circuit = Circuit::from(Gate::from("x") & !Gate::from("y"));
+            test_aiger_circuit_out(&circuit, "aag 3 2 0 1 1\n2\n4\n6\n6 5 2\ni0 x\ni1 y\n");
+            let circuit = circuit
+                .with_input_order(vec!["y".to_string(), "x".to_string()])
+                .unwrap();
+            test_aiger_circuit_out(&circuit, "aag 3 2 0 1 1\n2\n4\n6\n6 4 3\ni0 y\ni1 x\n");
+        }
     }
 
     mod input {
@@ -702,6 +714,13 @@ mod test {
             assert_eq!(aiger_decode_number(&mut &*buf).unwrap(), 0x81);
             let buf = vec![0x83, 0x80, 0x01];
             assert_eq!(aiger_decode_number(&mut &*buf).unwrap(), 16387);
+        }
+
+        #[test]
+        fn order_of_inputs() {
+            let data = b"aag 3 2 0 1 1\n2\n4\n6\n6 4 3\ni0 y\ni1 x\n";
+            let circuit = from_aiger(&data[..]).unwrap();
+            assert_eq!(circuit.input_names().collect_vec(), vec!["y", "x"]);
         }
     }
 }
