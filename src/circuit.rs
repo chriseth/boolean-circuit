@@ -129,3 +129,21 @@ impl Circuit {
             .unique()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn input_order() {
+        let c = Circuit::from(Gate::from("a") & Gate::from("b"));
+        assert_eq!(c.input_names().collect::<Vec<_>>(), vec!["a", "b"]);
+        let c = c
+            .with_input_order(vec!["b".to_string(), "a".to_string()])
+            .unwrap();
+        assert_eq!(
+            c.input_names().collect::<Vec<_>>(),
+            vec!["b".to_string(), "a".to_string()]
+        );
+    }
+}

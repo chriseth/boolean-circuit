@@ -646,6 +646,16 @@ mod test {
             let expected = b"aig 4 2 0 2 2\n9\n6\n\x02\x02\x01\x01i0 x\ni1 y\no0 out\no1 a\n";
             assert_eq!(buf, expected);
         }
+
+        #[test]
+        fn order_of_inputs() {
+            let circuit = Circuit::from(Gate::from("x") & !Gate::from("y"));
+            test_aiger_circuit_out(&circuit, "aag 3 2 0 1 1\n2\n4\n6\n6 5 2\ni0 x\ni1 y\n");
+            let circuit = circuit
+                .with_input_order(vec!["y".to_string(), "x".to_string()])
+                .unwrap();
+            test_aiger_circuit_out(&circuit, "aag 3 2 0 1 1\n2\n4\n6\n6 4 3\ni0 y\ni1 x\n");
+        }
     }
 
     mod input {
@@ -704,6 +714,13 @@ mod test {
             assert_eq!(aiger_decode_number(&mut &*buf).unwrap(), 0x81);
             let buf = vec![0x83, 0x80, 0x01];
             assert_eq!(aiger_decode_number(&mut &*buf).unwrap(), 16387);
+        }
+
+        #[test]
+        fn order_of_inputs() {
+            let data = b"aag 3 2 0 1 1\n2\n4\n6\n6 4 3\ni0 y\ni1 x\n";
+            let circuit = from_aiger(&data[..]).unwrap();
+            assert_eq!(circuit.input_names().collect_vec(), vec!["y", "x"]);
         }
     }
 }
