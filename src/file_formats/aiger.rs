@@ -43,7 +43,7 @@ pub fn from_aiger(f: impl Read) -> Result<Circuit, String> {
             _ => unreachable!(),
         })
         .map(|name| name.as_ref().clone())
-        .collect();
+        .collect_vec();
 
     let mut builder = CircuitBuilder {
         gates: names.inputs,
@@ -651,9 +651,7 @@ mod test {
         fn order_of_inputs() {
             let circuit = Circuit::from(Gate::from("x") & !Gate::from("y"));
             test_aiger_circuit_out(&circuit, "aag 3 2 0 1 1\n2\n4\n6\n6 5 2\ni0 x\ni1 y\n");
-            let circuit = circuit
-                .with_input_order(vec!["y".to_string(), "x".to_string()])
-                .unwrap();
+            let circuit = circuit.with_input_order(["y", "x"]).unwrap();
             test_aiger_circuit_out(&circuit, "aag 3 2 0 1 1\n2\n4\n6\n6 4 3\ni0 y\ni1 x\n");
         }
     }
