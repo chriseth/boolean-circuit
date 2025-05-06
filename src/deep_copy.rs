@@ -1,15 +1,18 @@
 use std::{collections::HashMap, rc::Rc};
 
-/// Creates a deep copy of the given circuit, assigning new names to all input gates
-/// except those in `input_gate_names_to_keep`.
-/// Returns the new circuit and the variable substitution map.
+/// Creates a deep copy of the given circuit, assigning new names to all input
+/// and output gates except those in `gate_names_to_keep`.
+/// Note that if input gates are not renamed, they will refer to the same
+/// inputs as the original gate in a combined circuit.
 ///
-/// The returned circuit has unnamed outputs.
+/// Returns the new circuit and the variable substitution map.
 pub fn deep_copy<'a>(
     circuit: &'a Circuit,
-    input_gate_names_to_keep: &'a [String],
+    gate_names_to_keep: &'a [String],
+    // TODO If we want to create multiple copies, we probably also need a way to
+    // block existing names.
 ) -> (Circuit, HashMap<&'a str, Rc<String>>) {
-    let mut deep_copy = DeepCopy::new(circuit, input_gate_names_to_keep);
+    let mut deep_copy = DeepCopy::new(circuit, gate_names_to_keep);
     let output_gates = circuit
         .outputs()
         .iter()
@@ -127,7 +130,7 @@ use std::collections::HashSet;
 
 use boolean_circuit::{Gate, Operation};
 
-use crate::Circuit;
+use crate::{Circuit, Gate};
 
 /// Returns a hash set of all variables in the circuit.
 pub fn variables_in_circuit(node: &Gate) -> HashSet<&str> {
@@ -158,7 +161,7 @@ pub struct NameDispenser {
 impl NameDispenser {
     /// Creates a variable dispenser such that each call to `next` returns a
     /// variable name that does not occur in `existing_circuit`.
-    pub fn new(existing_circuit: &Gate) -> Self {
+    pub fn new<'a>(existing_circuit: impl Iterator<Item = &'a Gate>) -> Self {
         Self {
             next_variable: next_free_variable(existing_circuit),
         }
