@@ -1,6 +1,6 @@
 [package]
 name = "boolean-circuit"
-version = "2.0.0"
+version = "2.2.0"
 edition = "2021"
 authors = ["chriseth <chriseth.github@gmail.com>"]
 description = "A library to import, modify and export boolean circuits."
