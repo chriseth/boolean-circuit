@@ -42,7 +42,11 @@ impl Circuit {
     }
 
     /// Adds the order of input gates to the circuit, or changes it.
-    pub fn with_input_order(self, input_names: Vec<String>) -> Result<Self, String> {
+    pub fn with_input_order(
+        self,
+        input_names: impl IntoIterator<Item = impl ToString>,
+    ) -> Result<Self, String> {
+        let input_names = input_names.into_iter().map(|n| n.to_string()).collect_vec();
         let inputs_in_circuit = self.input_names_from_traversal().collect::<HashSet<_>>();
         let input_names_set = input_names
             .iter()
@@ -72,10 +76,11 @@ impl Circuit {
     /// The empty string can be used to not name outputs.
     ///
     /// Panics if the output names are not unique.
-    pub fn from_named_outputs(items: impl IntoIterator<Item = (Gate, String)>) -> Self {
+    pub fn from_named_outputs(items: impl IntoIterator<Item = (Gate, impl ToString)>) -> Self {
         let mut seen_names: HashSet<_> = Default::default();
         let mut circuit = Self::default();
         for (gate, name) in items {
+            let name = name.to_string();
             if !name.is_empty() && !seen_names.insert(name.clone()) {
                 panic!("Duplicate output name {name}");
             }
@@ -103,6 +108,12 @@ impl Circuit {
     /// Returns the names of the output gates, where unnamed output gates use the empty String.
     pub fn output_names(&self) -> &[String] {
         &self.output_names
+    }
+
+    /// Returns an iterator over the output gates and their names, where unnamed output
+    /// gates use the empty string.
+    pub fn named_outputs(&self) -> impl Iterator<Item = (&Gate, &String)> {
+        self.outputs().iter().zip_eq(self.output_names())
     }
 
     /// Creates an iterator over the graph (the output gates and all their predecessors)
@@ -138,9 +149,7 @@ mod test {
     fn input_order() {
         let c = Circuit::from(Gate::from("a") & Gate::from("b"));
         assert_eq!(c.input_names().collect::<Vec<_>>(), vec!["a", "b"]);
-        let c = c
-            .with_input_order(vec!["b".to_string(), "a".to_string()])
-            .unwrap();
+        let c = c.with_input_order(["b", "a"]).unwrap();
         assert_eq!(
             c.input_names().collect::<Vec<_>>(),
             vec!["b".to_string(), "a".to_string()]

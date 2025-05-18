@@ -1,6 +1,8 @@
 pub mod builder;
 pub mod circuit;
 mod cnf;
+pub mod deep_copy;
+pub mod disjoint_union;
 mod evaluator;
 pub mod file_formats;
 pub mod gate;
